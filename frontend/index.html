@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAU E-Rickshaw Transport System</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- ========== AUTHENTICATION SECTION ========== -->
+    <div id="auth-section" class="auth-section">
+        <div class="auth-container">
+            <!-- Header -->
+            <div class="auth-header">
+                <div class="logo-circle">
+                    <!-- <i class="fas fa-rickshaw"></i> -->
+                     <img src="Logo.jpeg" alt="SAU">
+                </div>
+                <h1>SAU E-Rickshaw</h1>
+                <p>Campus Transportation System</p>
+            </div>
+            
+            <!-- User Type Selection -->
+            <div class="user-type-selection" id="user-type-selection">
+                <h3>Select User Type</h3>
+                <div class="user-type-cards">
+                    <div class="user-type-card" onclick="selectUserType('student')">
+                        <i class="fas fa-user-graduate"></i>
+                        <span>Student</span>
+                        <small>Access ride services</small>
+                    </div>
+                    <div class="user-type-card" onclick="selectUserType('driver')">
+                        <i class="fas fa-id-card-alt"></i>
+                        <span>Driver</span>
+                        <small>Manage rides & location</small>
+                    </div>
+                    <div class="user-type-card" onclick="selectUserType('admin')">
+                        <i class="fas fa-user-shield"></i>
+                        <span>Administrator</span>
+                        <small>System management</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Login Form -->
+            <div id="login-section" class="login-section hidden">
+                <div class="back-button" onclick="goBackToUserType()">
+                    <i class="fas fa-arrow-left"></i>
+                    Back to Selection
+                </div>
+                <h3 id="login-title">Account Login</h3>
+                <form id="login-form" class="auth-form">
+                    <div class="form-group">
+                        <input type="email" id="login-email" placeholder="University Email Address" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="password" id="login-password" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-sign-in-alt"></i>
+                        Sign In to System
+                    </button>
+                </form>
+                <div class="auth-switch" id="login-auth-switch">
+                    <p>Student registration? <span onclick="showRegister()">Register here</span></p>
+                </div>
+            </div>
+
+            <!-- Student Registration Form -->
+            <div id="register-section" class="register-section hidden">
+                <div class="back-button" onclick="goBackToUserType()">
+                    <i class="fas fa-arrow-left"></i>
+                    Back to Selection
+                </div>
+                <h3 id="register-title">Student Registration</h3>
+                <form id="register-form" class="auth-form">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <input type="text" id="register-rollNumber" placeholder="University Roll Number" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="register-fullName" placeholder="Full Name" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <input type="email" id="register-email" placeholder="University Email Address" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="tel" id="register-phone" placeholder="Phone Number" required>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <input type="text" id="register-department" placeholder="Department" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="register-hostel" placeholder="Hostel Name" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <input type="password" id="register-password" placeholder="Password" required>
+                        </div>
+                        <div class="form-group">
+                            <input type="password" id="register-confirmPassword" placeholder="Confirm Password" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-user-plus"></i>
+                        Create Student Account
+                    </button>
+                </form>
+                <div class="auth-switch">
+                    <p>Already registered? <span onclick="showLogin()">Sign in here</span></p>
+                </div>
+            </div>
+
+            <!-- Auth Footer -->
+            <div class="auth-footer">
+                <p>&copy; 2024 SAU E-Rickshaw System. Licensed under MIT License.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== MAIN APPLICATION SECTION ========== -->
+    <div id="app-section" class="app-section hidden">
+        <!-- Navigation Bar -->
+        <nav class="navbar">
+            <div class="nav-brand">
+                <div class="nav-logo">
+                    <i class="fas fa-rickshaw"></i>
+                </div>
+                <span>SAU E-Rickshaw Transport</span>
+            </div>
+            <div class="nav-user">
+                <span id="user-name">User</span>
+                <button onclick="logout()" class="btn-logout">
+                    <i class="fas fa-sign-out-alt"></i>
+                    Logout
+                </button>
+            </div>
+        </nav>
+
+        <!-- Dashboard Container -->
+        <div class="dashboard">
+            <!-- ========== STUDENT DASHBOARD ========== -->
+            <div id="student-dashboard" class="dashboard-content hidden">
+                <div class="dashboard-header">
+                    <h2><i class="fas fa-user-graduate"></i> Student Dashboard</h2>
+                    <div class="stats">
+                        <div class="stat-card">
+                            <i class="fas fa-route"></i>
+                            <span id="total-rides">0 Completed Rides</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="dashboard-grid">
+                    <!-- Ride Request Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-car-side"></i> Request E-Rickshaw</h3>
+                        <form id="request-ride-form">
+                            <div class="form-group">
+                                <label>Pickup Location:</label>
+                                <select id="pickup-point" required>
+                                    <option value="">Select pickup point</option>
+                                    <option value="Gate1">Main Gate 1</option>
+                                    <option value="Gate2">Gate 2</option>
+                                    <option value="Satbari">Satbari</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Dropoff Location:</label>
+                                <select id="dropoff-point" required>
+                                    <option value="">Select dropoff point</option>
+                                    <option value="Gate1">Main Gate 1</option>
+                                    <option value="Gate2">Gate 2</option>
+                                    <option value="Satbari">Satbari</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn-primary">
+                                <i class="fas fa-car-side"></i>
+                                Request Ride
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Available Autos Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-rickshaw"></i> Available E-Rickshaws</h3>
+                        <div class="card-content">
+                            <button id="refresh-autos" class="btn-secondary small">
+                                <i class="fas fa-sync-alt"></i>
+                                Refresh List
+                            </button>
+                            <div id="available-autos" class="autos-list">
+                                <div class="no-autos">
+                                    <i class="fas fa-rickshaw"></i>
+                                    <p>Select locations to view available autos</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Campus Map Card -->
+                    <div class="card full-width">
+                        <h3><i class="fas fa-map-marked-alt"></i> Campus Navigation Map</h3>
+                        <div class="card-content">
+                            <div class="map-controls">
+                                <button id="refresh-map" class="btn-secondary small">
+                                    <i class="fas fa-sync-alt"></i>
+                                    Refresh Map
+                                </button>
+                                <button id="locate-me" class="btn-secondary small">
+                                    <i class="fas fa-location-arrow"></i>
+                                    Locate Me
+                                </button>
+                            </div>
+                            <div id="campus-map" class="campus-map">
+                                <div class="map-loading">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    <p>Loading campus navigation...</p>
+                                </div>
+                            </div>
+                            <div class="map-legend">
+                                <div class="legend-item">
+                                    <span class="legend-marker student-marker"></span>
+                                    <span>Your Location</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-marker auto-marker"></span>
+                                    <span>Available Autos</span>
+                                </div>
+                                <div class="legend-item">
+                                    <span class="legend-marker gate-marker"></span>
+                                    <span>Campus Points</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ride History Card -->
+                    <div class="card full-width">
+                        <h3><i class="fas fa-history"></i> Ride History</h3>
+                        <div class="card-content">
+                            <div id="ride-history" class="ride-history">
+                                <div class="no-rides">
+                                    <i class="fas fa-history"></i>
+                                    <p>No ride history available</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Feedback Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-star"></i> Ride Feedback</h3>
+                        <div class="card-content">
+                            <form id="feedback-form" class="auth-form">
+                                <div class="form-group">
+                                    <label>Driver Rating:</label>
+                                    <div class="rating-stars">
+                                        <span class="star" data-rating="1">⭐</span>
+                                        <span class="star" data-rating="2">⭐</span>
+                                        <span class="star" data-rating="3">⭐</span>
+                                        <span class="star" data-rating="4">⭐</span>
+                                        <span class="star" data-rating="5">⭐</span>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Comments:</label>
+                                    <textarea id="feedback-text" placeholder="Share your ride experience..." rows="3"></textarea>
+                                </div>
+                                <button type="submit" class="btn-primary">
+                                    <i class="fas fa-paper-plane"></i>
+                                    Submit Feedback
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== DRIVER DASHBOARD ========== -->
+            <div id="driver-dashboard" class="dashboard-content hidden">
+                <div class="dashboard-header">
+                    <h2><i class="fas fa-id-card-alt"></i> Driver Dashboard</h2>
+                    <div class="stats">
+                        <div class="stat-card">
+                            <i class="fas fa-route"></i>
+                            <span id="driver-total-rides">0 Completed Rides</span>
+                        </div>
+                        <div class="stat-card">
+                            <i class="fas fa-star"></i>
+                            <span id="driver-rating">0.0 Rating</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="dashboard-grid">
+                    <!-- Driver Status Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-user-check"></i> Driver Status</h3>
+                        <div class="card-content">
+                            <div class="driver-status-buttons">
+                                <button class="status-btn active" data-status="available" onclick="updateDriverStatus('available')">
+                                    <i class="fas fa-check-circle"></i>
+                                    Available
+                                </button>
+                                <button class="status-btn" data-status="on_break" onclick="updateDriverStatus('on_break')">
+                                    <i class="fas fa-coffee"></i>
+                                    On Break
+                                </button>
+                                <button class="status-btn" data-status="off_duty" onclick="updateDriverStatus('off_duty')">
+                                    <i class="fas fa-power-off"></i>
+                                    Off Duty
+                                </button>
+                            </div>
+                            <div class="current-status">
+                                <span>Current Status: </span>
+                                <strong id="current-driver-status">Available</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Vehicle Information Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-rickshaw"></i> Vehicle Information</h3>
+                        <div class="card-content">
+                            <div id="auto-info" class="auto-info">
+                                <div class="info-item">
+                                    <label>Auto Number:</label>
+                                    <span id="auto-number">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <label>Registration:</label>
+                                    <span id="auto-registration">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <label>Seating Capacity:</label>
+                                    <span id="auto-capacity">- seats</span>
+                                </div>
+                                <div class="info-item">
+                                    <label>Current Location:</label>
+                                    <span id="auto-location">Not set</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Location Update Card -->
+                    <div class="card">
+                        <h3><i class="fas fa-map-marker-alt"></i> Update Location</h3>
+                        <div class="card-content">
+                            <form id="update-location-form">
+                                <div class="form-group">
+                                    <label>Current Location:</label>
+                                    <select id="driver-location" required>
+                                        <option value="">Select current location</option>
+                                        <option value="Gate1">Main Gate 1</option>
+                                        <option value="Gate2">Gate 2</option>
+                                        <option value="Satbari">Satbari</option>
+                                        <option value="OnRoute">On Route - Moving</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Available Seats:</label>
+                                    <input type="number" id="available-seats" min="0" max="4" value="4" required>
+                                </div>
+                                <button type="submit" class="btn-primary">
+                                    <i class="fas fa-map-marker-alt"></i>
+                                    Update Location
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Active Ride Card -->
+                    <div class="card full-width">
+                        <h3><i class="fas fa-route"></i> Active Ride Request</h3>
+                        <div class="card-content">
+                            <div id="active-ride" class="active-ride">
+                                <div class="no-ride">
+                                    <i class="fas fa-info-circle"></i>
+                                    <p>No active ride requests</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Driver Map Card -->
+                    <div class="card full-width">
+                        <h3><i class="fas fa-road"></i> Navigation & Routes</h3>
+                        <div class="card-content">
+                            <div id="driver-map" class="campus-map">
+                                <div class="map-loading">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    <p>Loading navigation map...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN DASHBOARD ========== -->
+            <div id="admin-dashboard" class="dashboard-content hidden">
+                <div class="dashboard-header">
+                    <h2><i class="fas fa-user-shield"></i> Administration Dashboard</h2>
+                    <div class="stats">
+                        <div class="stat-card">
+                            <i class="fas fa-users"></i>
+                            <span id="total-students">0 Students</span>
+                        </div>
+                        <div class="stat-card">
+                            <i class="fas fa-rickshaw"></i>
+                            <span id="total-drivers">0 Drivers</span>
+                        </div>
+                        <div class="stat-card">
+                            <i class="fas fa-route"></i>
+                            <span id="total-rides">0 Rides</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Admin Tabs Navigation -->
+                <div class="admin-tabs">
+                    <button class="admin-tab-btn active" data-tab="overview">System Overview</button>
+                    <button class="admin-tab-btn" data-tab="students">Student Management</button>
+                    <button class="admin-tab-btn" data-tab="drivers">Driver Management</button>
+                    <button class="admin-tab-btn" data-tab="autos">Vehicle Management</button>
+                    <button class="admin-tab-btn" data-tab="rides">Ride Monitoring</button>
+                </div>
+
+                <!-- Admin Tab Content -->
+                <div class="admin-tab-content">
+                    <!-- Overview Tab -->
+                    <div id="overview-tab" class="tab-pane active">
+                        <div class="admin-grid">
+                            <!-- System Stats Card -->
+                            <div class="card">
+                                <h3><i class="fas fa-chart-bar"></i> System Statistics</h3>
+                                <div class="card-content">
+                                    <div class="system-health">
+                                        <div class="health-item">
+                                            <span class="label">Active Vehicles:</span>
+                                            <span class="value" id="active-autos">0/0</span>
+                                        </div>
+                                        <div class="health-item">
+                                            <span class="label">Available Drivers:</span>
+                                            <span class="value" id="on-duty-drivers">0/0</span>
+                                        </div>
+                                        <div class="health-item">
+                                            <span class="label">Pending Ride Requests:</span>
+                                            <span class="value" id="pending-rides">0</span>
+                                        </div>
+                                        <div class="health-item">
+                                            <span class="label">System Status:</span>
+                                            <span class="value success">Operational</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Quick Actions Card -->
+                            <div class="card">
+                                <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
+                                <div class="card-content">
+                                    <div class="quick-actions">
+                                        <button class="action-btn" onclick="showAdminTab('drivers')">
+                                            <i class="fas fa-user-plus"></i>
+                                            Register Driver
+                                        </button>
+                                        <button class="action-btn" onclick="showAdminTab('autos')">
+                                            <i class="fas fa-rickshaw"></i>
+                                            Add Vehicle
+                                        </button>
+                                        <button class="action-btn" onclick="showAdminTab('students')">
+                                            <i class="fas fa-users"></i>
+                                            Manage Students
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Live Tracking Map Card -->
+                        <div class="card full-width">
+                            <h3><i class="fas fa-map-marked-alt"></i> Live Vehicle Tracking</h3>
+                            <div class="card-content">
+                                <div class="map-controls">
+                                    <button id="admin-refresh-map" class="btn-secondary small">
+                                        <i class="fas fa-sync-alt"></i>
+                                        Refresh Map
+                                    </button>
+                                    <button id="auto-locations" class="btn-secondary small">
+                                        <i class="fas fa-rickshaw"></i>
+                                        Show All Vehicles
+                                    </button>
+                                </div>
+                                <div id="admin-map" class="campus-map">
+                                    <div class="map-loading">
+                                        <i class="fas fa-spinner fa-spin"></i>
+                                        <p>Loading tracking system...</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Students Management Tab -->
+                    <div id="students-tab" class="tab-pane">
+                        <div class="card full-width">
+                            <div class="card-header">
+                                <h3><i class="fas fa-user-graduate"></i> Student Management</h3>
+                                <div class="card-actions">
+                                    <button class="btn-secondary small" onclick="refreshStudents()">
+                                        <i class="fas fa-sync-alt"></i>
+                                        Refresh
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-content">
+                                <div class="table-container">
+                                    <table id="students-table" class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Roll Number</th>
+                                                <th>Full Name</th>
+                                                <th>Email</th>
+                                                <th>Department</th>
+                                                <th>Hostel</th>
+                                                <th>Total Rides</th>
+                                                <th>Status</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="students-tbody">
+                                            <!-- Students data will be loaded here -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Drivers Management Tab -->
+                    <div id="drivers-tab" class="tab-pane">
+                        <div class="admin-grid">
+                            <!-- Add Driver Form Card -->
+                            <div class="card">
+                                <h3><i class="fas fa-user-plus"></i> Register New Driver</h3>
+                                <div class="card-content">
+                                    <form id="add-driver-form" class="auth-form">
+                                        <div class="form-group">
+                                            <input type="text" id="admin-driver-name" placeholder="Driver Full Name" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="email" id="admin-driver-email" placeholder="Email Address" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="tel" id="admin-driver-phone" placeholder="Phone Number" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="text" id="admin-driver-license" placeholder="License Number" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <select id="admin-driver-auto" required>
+                                                <option value="">Assign Vehicle</option>
+                                                <!-- Auto options will be populated dynamically -->
+                                            </select>
+                                        </div>
+                                        <button type="submit" class="btn-primary">
+                                            <i class="fas fa-user-plus"></i>
+                                            Register Driver
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+
+                            <!-- Drivers List Card -->
+                            <div class="card full-width">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-list"></i> Driver Management</h3>
+                                    <div class="card-actions">
+                                        <button class="btn-secondary small" onclick="refreshDrivers()">
+                                            <i class="fas fa-sync-alt"></i>
+                                            Refresh
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="card-content">
+                                    <div class="table-container">
+                                        <table id="drivers-table" class="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Driver ID</th>
+                                                    <th>Name</th>
+                                                    <th>Contact</th>
+                                                    <th>Assigned Vehicle</th>
+                                                    <th>Current Location</th>
+                                                    <th>Status</th>
+                                                    <th>Completed Rides</th>
+                                                    <th>Rating</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="drivers-tbody">
+                                                <!-- Drivers data will be loaded here -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Autos Management Tab -->
+                    <div id="autos-tab" class="tab-pane">
+                        <div class="admin-grid">
+                            <!-- Add Auto Form Card -->
+                            <div class="card">
+                                <h3><i class="fas fa-rickshaw"></i> Register New Vehicle</h3>
+                                <div class="card-content">
+                                    <form id="add-auto-form" class="auth-form">
+                                        <div class="form-group">
+                                            <input type="text" id="admin-auto-number" placeholder="Vehicle Number (A4, A5...)" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="text" id="admin-auto-type" placeholder="Vehicle Type" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <input type="number" id="admin-auto-capacity" placeholder="Seating Capacity" min="1" max="10" value="4" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <select id="admin-auto-location" required>
+                                                <option value="">Initial Location</option>
+                                                <option value="Gate1">Main Gate 1</option>
+                                                <option value="Gate2">Gate 2</option>
+                                                <option value="Satbari">Satbari</option>
+                                            </select>
+                                        </div>
+                                        <button type="submit" class="btn-primary">
+                                            <i class="fas fa-plus"></i>
+                                            Register Vehicle
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+
+                            <!-- Autos List Card -->
+                            <div class="card full-width">
+                                <div class="card-header">
+                                    <h3><i class="fas fa-list"></i> Vehicle Management</h3>
+                                    <div class="card-actions">
+                                        <button class="btn-secondary small" onclick="refreshAutos()">
+                                            <i class="fas fa-sync-alt"></i>
+                                            Refresh
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="card-content">
+                                    <div class="table-container">
+                                        <table id="autos-table" class="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Vehicle Number</th>
+                                                    <th>Registration</th>
+                                                    <th>Type</th>
+                                                    <th>Capacity</th>
+                                                    <th>Current Location</th>
+                                                    <th>Assigned Driver</th>
+                                                    <th>Status</th>
+                                                    <th>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="autos-tbody">
+                                                <!-- Autos data will be loaded here -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Rides Management Tab -->
+                    <div id="rides-tab" class="tab-pane">
+                        <div class="card full-width">
+                            <div class="card-header">
+                                <h3><i class="fas fa-route"></i> Ride Monitoring</h3>
+                                <div class="card-actions">
+                                    <button class="btn-secondary small" onclick="refreshRides()">
+                                        <i class="fas fa-sync-alt"></i>
+                                        Refresh
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-content">
+                                <div class="table-container">
+                                    <table id="rides-table" class="data-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Ride ID</th>
+                                                <th>Student</th>
+                                                <th>Driver</th>
+                                                <th>Vehicle</th>
+                                                <th>Pickup Location</th>
+                                                <th>Dropoff Location</th>
+                                                <th>Request Time</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="rides-tbody">
+                                            <!-- Rides data will be loaded here -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main App Footer -->
+        <footer class="app-footer">
+            <div class="footer-content">
+                <p>&copy; 2024 SAU E-Rickshaw Transportation System. All rights reserved.</p>
+                <p>Licensed under MIT License | Version 2.1.0 | SAU Transport Department</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- JavaScript Files -->
+    <script src="js/app.js"></script>
+    <script src="js/map.js"></script>
+</body>
+</html>

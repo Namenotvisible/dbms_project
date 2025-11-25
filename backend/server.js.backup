@@ -1,0 +1,1128 @@
+const express = require('express');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
+require('dotenv').config();
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('../frontend'));
+
+// Database connection with connection pooling for better performance
+const dbConfig = {
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'e_rickshaw_db',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+};
+
+const pool = mysql.createPool(dbConfig);
+
+// Default password hash (for demo purposes)
+const DEFAULT_PASSWORD = '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi'; // "password"
+
+// JWT Secret fallback
+const JWT_SECRET = process.env.JWT_SECRET || 'your-university-secret-key-2024';
+
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ error: 'Access token required' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Invalid token' });
+        }
+        req.user = user;
+        next();
+    });
+};
+
+// Role-based authentication middleware
+const requireRole = (roles) => {
+    return (req, res, next) => {
+        if (!roles.includes(req.user.userType)) {
+            return res.status(403).json({ error: 'Insufficient permissions' });
+        }
+        next();
+    };
+};
+
+// Utility function for database connections
+const getConnection = async () => {
+    return await pool.getConnection();
+};
+
+// ==================== ENHANCED ROUTES ====================
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        message: 'University E-Rickshaw Service is running',
+        timestamp: new Date().toISOString(),
+        version: '2.0.0'
+    });
+});
+
+// User Registration (Students only)
+app.post('/api/register', async (req, res) => {
+    let connection;
+    try {
+        const { userType, rollNumber, fullName, email, phoneNumber, password, department, hostelName } = req.body;
+        
+        if (userType !== 'student') {
+            return res.status(400).json({ error: 'Only student registration is permitted' });
+        }
+
+        // Enhanced validation
+        if (!rollNumber || !fullName || !email || !password) {
+            return res.status(400).json({ error: 'Required fields are missing' });
+        }
+
+        if (password.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+        }
+
+        connection = await getConnection();
+        
+        // Check if email already exists
+        const [existingUsers] = await connection.execute(
+            'SELECT student_id FROM student WHERE email = ?',
+            [email]
+        );
+        
+        if (existingUsers.length > 0) {
+            return res.status(400).json({ error: 'Email address is already registered' });
+        }
+
+        // Check if roll number already exists
+        const [existingRoll] = await connection.execute(
+            'SELECT student_id FROM student WHERE roll_number = ?',
+            [rollNumber]
+        );
+        
+        if (existingRoll.length > 0) {
+            return res.status(400).json({ error: 'Roll number is already registered' });
+        }
+
+        // Hash the password before storing
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Insert student WITH password
+        const [result] = await connection.execute(
+            'INSERT INTO student (roll_number, full_name, email, phone_number, department, hostel_name, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+            [rollNumber, fullName, email, phoneNumber, department, hostelName, hashedPassword]
+        );
+        
+        res.json({ 
+            success: true, 
+            message: 'Student account created successfully',
+            studentId: result.insertId 
+        });
+        
+    } catch (error) {
+        console.error('Registration error:', error);
+        res.status(500).json({ error: 'Registration failed: ' + error.message });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// User Login
+app.post('/api/login', async (req, res) => {
+    let connection;
+    try {
+        const { email, password, userType } = req.body;
+        
+        if (!email || !password || !userType) {
+            return res.status(400).json({ error: 'Email, password, and user type are required' });
+        }
+
+        connection = await getConnection();
+        
+        let user, table, idField, nameField;
+        
+        switch (userType) {
+            case 'admin':
+                table = 'admin';
+                idField = 'admin_id';
+                nameField = 'username';
+                break;
+            case 'student':
+                table = 'student';
+                idField = 'student_id';
+                nameField = 'full_name';
+                break;
+            case 'driver':
+                table = 'auto_driver';
+                idField = 'driver_id';
+                nameField = 'full_name';
+                break;
+            default:
+                return res.status(400).json({ error: 'Invalid user type specified' });
+        }
+        
+        const [users] = await connection.execute(
+            `SELECT * FROM ${table} WHERE email = ?`,
+            [email]
+        );
+        
+        if (users.length === 0) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+        
+        user = users[0];
+        
+        let validPassword;
+        
+        // Enhanced password verification
+        switch (userType) {
+            case 'student':
+                if (user.password_hash && user.password_hash !== '') {
+                    validPassword = await bcrypt.compare(password, user.password_hash);
+                } else {
+                    validPassword = await bcrypt.compare(password, DEFAULT_PASSWORD);
+                }
+                break;
+            case 'admin':
+            case 'driver':
+                validPassword = await bcrypt.compare(password, DEFAULT_PASSWORD);
+                break;
+            default:
+                validPassword = false;
+        }
+        
+        if (!validPassword) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
+        
+        const token = jwt.sign(
+            { 
+                id: user[idField], 
+                email: user.email, 
+                userType: userType,
+                name: user[nameField]
+            },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+        
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: user[idField],
+                name: user[nameField],
+                email: user.email,
+                userType: userType,
+                ...(userType === 'student' && {
+                    rollNumber: user.roll_number,
+                    department: user.department,
+                    hostelName: user.hostel_name
+                }),
+                ...(userType === 'driver' && {
+                    autoId: user.auto_id,
+                    licenseNumber: user.license_number
+                })
+            }
+        });
+        
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Authentication failed: ' + error.message });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get user profile
+app.get('/api/profile', authenticateToken, async (req, res) => {
+    let connection;
+    try {
+        const { id, userType } = req.user;
+        connection = await getConnection();
+
+        let table, idField;
+        switch (userType) {
+            case 'admin':
+                table = 'admin';
+                idField = 'admin_id';
+                break;
+            case 'student':
+                table = 'student';
+                idField = 'student_id';
+                break;
+            case 'driver':
+                table = 'auto_driver';
+                idField = 'driver_id';
+                break;
+            default:
+                return res.status(400).json({ error: 'Invalid user type' });
+        }
+
+        const [users] = await connection.execute(
+            `SELECT * FROM ${table} WHERE ${idField} = ?`,
+            [id]
+        );
+
+        if (users.length === 0) {
+            return res.status(404).json({ error: 'User profile not found' });
+        }
+
+        const user = users[0];
+        res.json({ 
+            success: true,
+            user 
+        });
+    } catch (error) {
+        console.error('Profile error:', error);
+        res.status(500).json({ error: 'Failed to retrieve profile information' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get available autos with real-time data
+app.get('/api/autos/available', authenticateToken, async (req, res) => {
+    let connection;
+    try {
+        const { location } = req.query;
+        connection = await getConnection();
+        
+        let query = `
+            SELECT a.*, ad.full_name as driver_name, ad.phone_number as driver_phone,
+                   ad.driver_id, ad.rating as driver_rating,
+                   COALESCE(aa.available_seats, a.seating_capacity) as available_seats,
+                   COALESCE(aa.current_location, a.current_location) as current_location,
+                   aa.last_updated
+            FROM auto a 
+            JOIN auto_driver ad ON a.auto_id = ad.auto_id 
+            LEFT JOIN auto_availability aa ON a.auto_id = aa.auto_id
+            WHERE a.is_available = TRUE AND ad.is_available = TRUE
+        `;
+        
+        const params = [];
+        
+        if (location) {
+            query += ' AND (aa.current_location = ? OR a.current_location = ?)';
+            params.push(location, location);
+        }
+        
+        query += ' ORDER BY aa.last_updated DESC';
+        
+        const [autos] = await connection.execute(query, params);
+        
+        res.json({
+            success: true,
+            count: autos.length,
+            autos
+        });
+    } catch (error) {
+        console.error('Error fetching autos:', error);
+        res.status(500).json({ error: 'Failed to retrieve available autos' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get all autos (for admin)
+app.get('/api/autos', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        connection = await getConnection();
+        
+        const [autos] = await connection.execute(`
+            SELECT a.*, ad.full_name as driver_name, ad.phone_number as driver_phone,
+                   ad.license_number, ad.rating, ad.is_available as driver_available
+            FROM auto a 
+            LEFT JOIN auto_driver ad ON a.auto_id = ad.auto_id
+            ORDER BY a.auto_id
+        `);
+        
+        res.json({
+            success: true,
+            count: autos.length,
+            autos
+        });
+    } catch (error) {
+        console.error('Error fetching autos:', error);
+        res.status(500).json({ error: 'Failed to retrieve auto information' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get all drivers (for admin)
+app.get('/api/drivers', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        connection = await getConnection();
+        
+        const [drivers] = await connection.execute(`
+            SELECT ad.*, a.auto_number, a.auto_type, a.seating_capacity
+            FROM auto_driver ad 
+            LEFT JOIN auto a ON ad.auto_id = a.auto_id
+            ORDER BY ad.driver_id
+        `);
+        
+        res.json({
+            success: true,
+            count: drivers.length,
+            drivers
+        });
+    } catch (error) {
+        console.error('Error fetching drivers:', error);
+        res.status(500).json({ error: 'Failed to retrieve driver information' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get all students (for admin)
+app.get('/api/students', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        connection = await getConnection();
+        
+        const [students] = await connection.execute(`
+            SELECT student_id, roll_number, full_name, email, phone_number, 
+                   department, hostel_name, created_at
+            FROM student 
+            ORDER BY created_at DESC
+        `);
+        
+        res.json({
+            success: true,
+            count: students.length,
+            students
+        });
+    } catch (error) {
+        console.error('Error fetching students:', error);
+        res.status(500).json({ error: 'Failed to retrieve student information' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Delete student (admin only)
+app.delete('/api/students/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        const { id } = req.params;
+        connection = await getConnection();
+
+        const [result] = await connection.execute(
+            'DELETE FROM student WHERE student_id = ?',
+            [id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Student record not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Student record deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete student error:', error);
+        res.status(500).json({ error: 'Failed to delete student record' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Delete driver (admin only)
+app.delete('/api/drivers/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        const { id } = req.params;
+        connection = await getConnection();
+
+        const [result] = await connection.execute(
+            'DELETE FROM auto_driver WHERE driver_id = ?',
+            [id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Driver record not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Driver record deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete driver error:', error);
+        res.status(500).json({ error: 'Failed to delete driver record' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Delete auto (admin only)
+app.delete('/api/autos/:id', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        const { id } = req.params;
+        connection = await getConnection();
+
+        // Check if auto is assigned to any driver
+        const [drivers] = await connection.execute(
+            'SELECT driver_id FROM auto_driver WHERE auto_id = ?',
+            [id]
+        );
+
+        if (drivers.length > 0) {
+            return res.status(400).json({ 
+                error: 'Cannot delete auto. It is currently assigned to a driver.' 
+            });
+        }
+
+        const [result] = await connection.execute(
+            'DELETE FROM auto WHERE auto_id = ?',
+            [id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Auto record not found' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Auto record deleted successfully'
+        });
+    } catch (error) {
+        console.error('Delete auto error:', error);
+        res.status(500).json({ error: 'Failed to delete auto record' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Get ride history for user
+app.get('/api/rides/history', authenticateToken, async (req, res) => {
+    let connection;
+    try {
+        const { id, userType } = req.user;
+        connection = await getConnection();
+
+        let query, params;
+        
+        if (userType === 'student') {
+            query = `
+                SELECT r.*, ad.full_name as driver_name, a.auto_number,
+                       ad.phone_number as driver_phone
+                FROM ride r
+                JOIN auto_driver ad ON r.driver_id = ad.driver_id
+                JOIN auto a ON r.auto_id = a.auto_id
+                WHERE r.student_id = ?
+                ORDER BY r.created_at DESC
+            `;
+            params = [id];
+        } else if (userType === 'driver') {
+            query = `
+                SELECT r.*, s.full_name as student_name, s.roll_number,
+                       s.phone_number as student_phone
+                FROM ride r
+                JOIN student s ON r.student_id = s.student_id
+                WHERE r.driver_id = ?
+                ORDER BY r.created_at DESC
+            `;
+            params = [id];
+        } else {
+            // Admin - all rides
+            query = `
+                SELECT r.*, s.full_name as student_name, s.roll_number,
+                       ad.full_name as driver_name, a.auto_number
+                FROM ride r
+                JOIN student s ON r.student_id = s.student_id
+                JOIN auto_driver ad ON r.driver_id = ad.driver_id
+                JOIN auto a ON r.auto_id = a.auto_id
+                ORDER BY r.created_at DESC
+            `;
+            params = [];
+        }
+
+        const [rides] = await connection.execute(query, params);
+        res.json({
+            success: true,
+            count: rides.length,
+            rides
+        });
+    } catch (error) {
+        console.error('Error fetching ride history:', error);
+        res.status(500).json({ error: 'Failed to retrieve ride history' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Submit feedback
+app.post('/api/feedback', authenticateToken, async (req, res) => {
+    let connection;
+    try {
+        const { ride_id, rating, comments, driver_id } = req.body;
+        const student_id = req.user.id;
+
+        if (!rating || !driver_id) {
+            return res.status(400).json({ error: 'Rating and driver ID are required' });
+        }
+
+        if (rating < 1 || rating > 5) {
+            return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+        }
+
+        connection = await getConnection();
+
+        const [result] = await connection.execute(
+            `INSERT INTO feedback (student_id, driver_id, ride_id, rating, comments, created_at) 
+             VALUES (?, ?, ?, ?, ?, NOW())`,
+            [student_id, driver_id, ride_id, rating, comments]
+        );
+
+        // Update driver's average rating
+        const [ratingResult] = await connection.execute(
+            `SELECT AVG(rating) as avg_rating FROM feedback WHERE driver_id = ?`,
+            [driver_id]
+        );
+
+        if (ratingResult[0].avg_rating) {
+            await connection.execute(
+                `UPDATE auto_driver SET rating = ? WHERE driver_id = ?`,
+                [parseFloat(ratingResult[0].avg_rating).toFixed(2), driver_id]
+            );
+        }
+
+        res.json({ 
+            success: true, 
+            feedback_id: result.insertId,
+            message: 'Feedback submitted successfully' 
+        });
+    } catch (error) {
+        console.error('Feedback error:', error);
+        res.status(500).json({ error: 'Failed to submit feedback' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Add new auto (admin only)
+app.post('/api/autos', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        const { auto_number, auto_type, seating_capacity, current_location } = req.body;
+        
+        if (!auto_number || !auto_type) {
+            return res.status(400).json({ error: 'Auto number and type are required' });
+        }
+
+        connection = await getConnection();
+
+        // Check if auto number already exists
+        const [existingAutos] = await connection.execute(
+            'SELECT auto_id FROM auto WHERE auto_number = ?',
+            [auto_number]
+        );
+
+        if (existingAutos.length > 0) {
+            return res.status(400).json({ error: 'Auto number already exists' });
+        }
+
+        const [result] = await connection.execute(
+            `INSERT INTO auto (auto_number, auto_type, seating_capacity, current_location, is_available, created_at) 
+             VALUES (?, ?, ?, ?, TRUE, NOW())`,
+            [auto_number, auto_type, seating_capacity, current_location]
+        );
+
+        res.json({ 
+            success: true, 
+            auto_id: result.insertId,
+            message: 'Auto added successfully' 
+        });
+    } catch (error) {
+        console.error('Add auto error:', error);
+        res.status(500).json({ error: 'Failed to add auto' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Add new driver (admin only)
+app.post('/api/drivers', authenticateToken, requireRole(['admin']), async (req, res) => {
+    let connection;
+    try {
+        const { full_name, email, phone_number, license_number, auto_id } = req.body;
+        
+        if (!full_name || !email || !license_number) {
+            return res.status(400).json({ error: 'Required fields are missing' });
+        }
+
+        connection = await getConnection();
+
+        // Check if email already exists
+        const [existingDrivers] = await connection.execute(
+            'SELECT driver_id FROM auto_driver WHERE email = ?',
+            [email]
+        );
+
+        if (existingDrivers.length > 0) {
+            return res.status(400).json({ error: 'Email already registered for another driver' });
+        }
+
+        // Check if license number already exists
+        const [existingLicense] = await connection.execute(
+            'SELECT driver_id FROM auto_driver WHERE license_number = ?',
+            [license_number]
+        );
+
+        if (existingLicense.length > 0) {
+            return res.status(400).json({ error: 'License number already registered' });
+        }
+
+        const [result] = await connection.execute(
+            `INSERT INTO auto_driver (full_name, email, phone_number, license_number, auto_id, is_available, created_at) 
+             VALUES (?, ?, ?, ?, ?, TRUE, NOW())`,
+            [full_name, email, phone_number, license_number, auto_id]
+        );
+
+        res.json({ 
+            success: true, 
+            driver_id: result.insertId,
+            message: 'Driver added successfully' 
+        });
+    } catch (error) {
+        console.error('Add driver error:', error);
+        res.status(500).json({ error: 'Failed to add driver' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Update auto availability
+app.put('/api/autos/:id/availability', authenticateToken, requireRole(['driver', 'admin']), async (req, res) => {
+    let connection;
+    try {
+        const { id } = req.params;
+        const { is_available } = req.body;
+
+        connection = await getConnection();
+
+        await connection.execute(
+            `UPDATE auto SET is_available = ? WHERE auto_id = ?`,
+            [is_available, id]
+        );
+
+        res.json({ 
+            success: true, 
+            message: 'Auto availability updated successfully' 
+        });
+    } catch (error) {
+        console.error('Update auto availability error:', error);
+        res.status(500).json({ error: 'Failed to update auto availability' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// Update driver availability
+app.put('/api/drivers/:id/availability', authenticateToken, requireRole(['driver', 'admin']), async (req, res) => {
+    let connection;
+    try {
+        const { id } = req.params;
+        const { is_available } = req.body;
+
+        connection = await getConnection();
+
+        await connection.execute(
+            `UPDATE auto_driver SET is_available = ? WHERE driver_id = ?`,
+            [is_available, id]
+        );
+
+        res.json({ 
+            success: true, 
+            message: 'Driver availability updated successfully' 
+        });
+    } catch (error) {
+        console.error('Update driver availability error:', error);
+        res.status(500).json({ error: 'Failed to update driver availability' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// ==================== ENHANCED SOCKET.IO HANDLERS ====================
+
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+
+    // Join user to their specific room for private messages
+    socket.on('join_user', (userData) => {
+        if (userData.userType && userData.id) {
+            const roomName = `${userData.userType}_${userData.id}`;
+            socket.join(roomName);
+            console.log(`User ${userData.id} joined room: ${roomName}`);
+        }
+    });
+
+    // Driver Location Updates
+    socket.on('driver_location_update', async (data) => {
+        try {
+            console.log('Driver location update received:', data);
+            
+            const connection = await getConnection();
+            await connection.execute(
+                `INSERT INTO auto_availability (auto_id, driver_id, available_seats, current_location, last_updated) 
+                 VALUES (?, ?, ?, ?, NOW()) 
+                 ON DUPLICATE KEY UPDATE 
+                 available_seats = VALUES(available_seats), 
+                 current_location = VALUES(current_location), 
+                 last_updated = NOW()`,
+                [data.auto_id, data.driver_id, data.available_seats, data.current_location]
+            );
+            connection.release();
+            
+            // Broadcast to all clients except sender
+            socket.broadcast.emit('location_updated', {
+                ...data,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Confirm to sender
+            socket.emit('location_update_confirmed', { 
+                success: true, 
+                timestamp: new Date().toISOString() 
+            });
+        } catch (error) {
+            console.error('Location update error:', error);
+            socket.emit('location_update_confirmed', { 
+                success: false, 
+                error: error.message 
+            });
+        }
+    });
+
+    // Real-time Ride Request
+    socket.on('request_ride', async (data) => {
+        try {
+            console.log('Ride request received:', data);
+            const { student_id, pickup_point, dropoff_point, auto_id } = data;
+
+            const connection = await getConnection();
+            
+            // Get driver_id for the auto
+            const [drivers] = await connection.execute(
+                'SELECT driver_id FROM auto_driver WHERE auto_id = ? AND is_available = TRUE',
+                [auto_id]
+            );
+            
+            if (drivers.length === 0) {
+                connection.release();
+                socket.emit('ride_request_failed', {
+                    reason: 'No available driver for this auto'
+                });
+                return;
+            }
+            
+            const driver_id = drivers[0].driver_id;
+            
+            // Create ride record
+            const [result] = await connection.execute(
+                `INSERT INTO ride (student_id, auto_id, driver_id, pickup_point, dropoff_point, 
+                 status, created_at) 
+                 VALUES (?, ?, ?, ?, ?, 'requested', NOW())`,
+                [student_id, auto_id, driver_id, pickup_point, dropoff_point]
+            );
+            
+            const rideData = {
+                ride_id: result.insertId,
+                student_id,
+                driver_id,
+                auto_id,
+                pickup_point,
+                dropoff_point,
+                status: 'requested',
+                created_at: new Date().toISOString()
+            };
+            
+            connection.release();
+
+            // Notify the specific driver
+            socket.to(`driver_${driver_id}`).emit('new_ride_request', rideData);
+            
+            // Confirm to student
+            socket.emit('ride_request_confirmed', {
+                success: true,
+                ride_id: result.insertId,
+                message: 'Ride request sent to driver'
+            });
+            
+        } catch (error) {
+            console.error('Ride request error:', error);
+            socket.emit('ride_request_failed', {
+                reason: 'Failed to process ride request'
+            });
+        }
+    });
+
+    // Ride Status Updates
+    socket.on('update_ride_status', async (data) => {
+        try {
+            const { ride_id, status, driver_id } = data;
+            console.log(`Updating ride ${ride_id} to status: ${status}`);
+
+            const connection = await getConnection();
+            
+            await connection.execute(
+                'UPDATE ride SET status = ?, updated_at = NOW() WHERE ride_id = ?',
+                [status, ride_id]
+            );
+            
+            // Get ride details for notification
+            const [rides] = await connection.execute(
+                `SELECT r.*, s.student_id, s.full_name as student_name 
+                 FROM ride r 
+                 JOIN student s ON r.student_id = s.student_id 
+                 WHERE r.ride_id = ?`,
+                [ride_id]
+            );
+            
+            if (rides.length > 0) {
+                const ride = rides[0];
+                const updateData = {
+                    ride_id,
+                    status,
+                    timestamp: new Date().toISOString(),
+                    driver_id
+                };
+
+                // Notify student
+                socket.to(`student_${ride.student_id}`).emit('ride_status_updated', updateData);
+                
+                // Broadcast to admin (all admins)
+                socket.broadcast.emit('ride_status_changed', {
+                    ...updateData,
+                    student_name: ride.student_name
+                });
+            }
+            
+            connection.release();
+            
+            socket.emit('ride_status_update_confirmed', { 
+                success: true, 
+                ride_id, 
+                status 
+            });
+            
+        } catch (error) {
+            console.error('Ride status update error:', error);
+            socket.emit('ride_status_update_confirmed', { 
+                success: false, 
+                error: error.message 
+            });
+        }
+    });
+
+    // Feedback Submission
+    socket.on('submit_feedback', async (data) => {
+        try {
+            console.log('Feedback received via socket:', data);
+            
+            const connection = await getConnection();
+            const [result] = await connection.execute(
+                `INSERT INTO feedback (student_id, driver_id, ride_id, rating, comments, created_at) 
+                 VALUES (?, ?, ?, ?, ?, NOW())`,
+                [data.student_id, data.driver_id, data.ride_id, data.rating, data.comments]
+            );
+            
+            connection.release();
+            
+            socket.emit('feedback_submitted', { 
+                success: true, 
+                feedback_id: result.insertId 
+            });
+        } catch (error) {
+            console.error('Feedback submission error:', error);
+            socket.emit('feedback_submitted', { 
+                success: false, 
+                error: error.message 
+            });
+        }
+    });
+
+    // Driver Status Updates
+    socket.on('driver_status_update', async (data) => {
+        try {
+            console.log('Driver status update:', data);
+            
+            const connection = await getConnection();
+            await connection.execute(
+                'UPDATE auto_driver SET is_available = ? WHERE driver_id = ?',
+                [data.is_available, data.driver_id]
+            );
+            
+            connection.release();
+            
+            const statusData = {
+                driver_id: data.driver_id,
+                is_available: data.is_available,
+                timestamp: new Date().toISOString()
+            };
+            
+            socket.broadcast.emit('driver_status_changed', statusData);
+            socket.emit('status_update_confirmed', { success: true });
+        } catch (error) {
+            console.error('Driver status update error:', error);
+            socket.emit('status_update_confirmed', { success: false, error: error.message });
+        }
+    });
+
+    // Admin Management - Add Driver
+    socket.on('add_driver', async (data) => {
+        try {
+            console.log('Adding new driver:', data);
+            
+            const connection = await getConnection();
+            const [result] = await connection.execute(
+                `INSERT INTO auto_driver (full_name, email, phone_number, license_number, auto_id, is_available, created_at) 
+                 VALUES (?, ?, ?, ?, ?, TRUE, NOW())`,
+                [data.full_name, data.email, data.phone_number, data.license_number, data.auto_id]
+            );
+            
+            connection.release();
+            
+            const driverData = {
+                ...data,
+                driver_id: result.insertId,
+                created_at: new Date().toISOString()
+            };
+            
+            socket.broadcast.emit('driver_added', driverData);
+            socket.emit('driver_added_confirmed', { success: true, driver_id: result.insertId });
+        } catch (error) {
+            console.error('Add driver error:', error);
+            socket.emit('driver_added_confirmed', { success: false, error: error.message });
+        }
+    });
+
+    // Admin Management - Add Auto
+    socket.on('add_auto', async (data) => {
+        try {
+            console.log('Adding new auto:', data);
+            
+            const connection = await getConnection();
+            const [result] = await connection.execute(
+                `INSERT INTO auto (auto_number, auto_type, seating_capacity, current_location, is_available, created_at) 
+                 VALUES (?, ?, ?, ?, TRUE, NOW())`,
+                [data.auto_number, data.auto_type, data.seating_capacity, data.current_location]
+            );
+            
+            connection.release();
+            
+            const autoData = {
+                ...data,
+                auto_id: result.insertId,
+                created_at: new Date().toISOString()
+            };
+            
+            socket.broadcast.emit('auto_added', autoData);
+            socket.emit('auto_added_confirmed', { success: true, auto_id: result.insertId });
+        } catch (error) {
+            console.error('Add auto error:', error);
+            socket.emit('auto_added_confirmed', { success: false, error: error.message });
+        }
+    });
+
+    // Real-time Notifications
+    socket.on('send_notification', (data) => {
+        console.log('Sending notification:', data);
+        
+        if (data.targetUserType && data.targetUserId) {
+            // Send to specific user
+            socket.to(`${data.targetUserType}_${data.targetUserId}`).emit('notification_received', {
+                ...data,
+                timestamp: new Date().toISOString()
+            });
+        } else {
+            // Broadcast to all
+            socket.broadcast.emit('notification_received', {
+                ...data,
+                timestamp: new Date().toISOString()
+            });
+        }
+        
+        socket.emit('notification_sent', { success: true });
+    });
+
+    // Disconnection handler
+    socket.on('disconnect', (reason) => {
+        console.log('Client disconnected:', socket.id, 'Reason:', reason);
+    });
+
+    // Error handling
+    socket.on('error', (error) => {
+        console.error('Socket error:', error);
+    });
+});
+
+// Enhanced error handling middleware
+app.use((error, req, res, next) => {
+    console.error('Unhandled error:', error);
+    res.status(500).json({ 
+        success: false,
+        error: 'Internal server error occurred' 
+    });
+});
+
+// 404 handler
+app.use('*', (req, res) => {
+    res.status(404).json({ 
+        success: false,
+        error: 'Requested endpoint not found' 
+    });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 University E-Rickshaw Service running on port ${PORT}`);
+    console.log(`📱 Access the application at: http://localhost:${PORT}`);
+    console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔑 Demo Login Credentials:`);
+    console.log(`   👨‍💼 Admin: admin@sau.ac.in / password`);
+    console.log(`   👨‍🎓 Student: amit.sharma@sau.ac.in / password`);
+    console.log(`   👨‍🚒 Driver: rajesh.driver@sau.ac.in / password`);
+    console.log(`⏰ Server started at: ${new Date().toISOString()}`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+    console.log('\n🛑 Shutting down server gracefully...');
+    await pool.end();
+    server.close(() => {
+        console.log('✅ Server closed successfully');
+        process.exit(0);
+    });
+});
+
+module.exports = app;
